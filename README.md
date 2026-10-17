@@ -24,39 +24,11 @@ That registers `my_service_telegram_requests_total{method,result}` with `result`
 
 ## Using the module
 
-The repository is private, so Go has to skip the public proxy and checksum database for it.
-
-Locally, set it for the command or your shell:
-
 ```bash
-GOPRIVATE='github.com/ambrdk/*' go get github.com/ambrdk/notifykit@v0.1.0
+go get github.com/ambrdk/notifykit@v0.1.0
 ```
 
-In GitHub Actions, add a repo secret `NOTIFYKIT_TOKEN` with a fine-grained token that has read access to the contents of this repository, then before any step that downloads modules:
-
-```yaml
-env:
-  GOPRIVATE: github.com/ambrdk/*
-steps:
-  - uses: actions/checkout@v5
-  - run: git config --global url."https://x-access-token:${NOTIFYKIT_TOKEN}@github.com/ambrdk/".insteadOf "https://github.com/ambrdk/"
-    env:
-      NOTIFYKIT_TOKEN: ${{ secrets.NOTIFYKIT_TOKEN }}
-```
-
-In a Dockerfile, pass the token as a BuildKit secret so it stays out of the image layers:
-
-```dockerfile
-ENV GOPRIVATE=github.com/ambrdk/*
-COPY go.mod go.sum ./
-RUN --mount=type=secret,id=notifykit_token,required=true \
-    GIT_CONFIG_COUNT=1 \
-    GIT_CONFIG_KEY_0="url.https://x-access-token:$(cat /run/secrets/notifykit_token)@github.com/ambrdk/.insteadOf" \
-    GIT_CONFIG_VALUE_0="https://github.com/ambrdk/" \
-    go mod download
-```
-
-and build with `docker build --secret id=notifykit_token,env=NOTIFYKIT_TOKEN .` (or `secrets: notifykit_token=...` in `docker/build-push-action`).
+The module is public, so CI and Docker builds fetch it through the regular Go proxy with no tokens.
 
 ## Versions
 
