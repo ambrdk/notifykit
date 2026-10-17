@@ -1,0 +1,197 @@
+package telegram
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
+)
+
+const token = "123:secret-token"
+
+type call struct {
+	path   string
+	fields map[string]string
+}
+
+func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+func fake(t *testing.T, status int, reply string) (*Client, *[]call) {
+	t.Helper()
+	calls := &[]call{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fields := map[string]string{}
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		if err := r.ParseMultipartForm(1 << 20); err == nil {
+			for k, v := range r.MultipartForm.Value {
+				fields[k] = v[0]
+			}
+		}
+		*calls = append(*calls, call{path: r.URL.Path, fields: fields})
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, reply)
+	}))
+	t.Cleanup(srv.Close)
+	c, err := New(token, srv.URL, quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, calls
+}
+
+func TestSendMessageBody(t *testing.T) {
+	c, calls := fake(t, 200, `{"ok":true,"result":{"message_id":55,"chat":{"id":-100}}}`)
+	id, err := c.SendMessage(context.Background(), Message{ChatID: "-100", Text: "hi", Silent: true, ReplyTo: 9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != 55 {
+		t.Fatalf("id %d", id)
+	}
+	got := (*calls)[0]
+	if got.path != "/bot"+token+"/sendMessage" {
+		t.Fatalf("path %s", got.path)
+	}
+	f := got.fields
+	if f["chat_id"] != "-100" || f["text"] != "hi" || f["parse_mode"] != "HTML" || f["disable_notification"] != "true" {
+		t.Fatalf("fields %v", f)
+	}
+	var reply map[string]any
+	if err := json.Unmarshal([]byte(f["reply_parameters"]), &reply); err != nil || reply["message_id"] != float64(9) {
+		t.Fatalf("reply %q", f["reply_parameters"])
+	}
+	assertNoPreview(t, f)
+}
+
+func assertNoPreview(t *testing.T, f map[string]string) {
+	t.Helper()
+	var preview map[string]any
+	if err := json.Unmarshal([]byte(f["link_preview_options"]), &preview); err != nil || preview["is_disabled"] != true {
+		t.Fatalf("link_preview_options %q", f["link_preview_options"])
+	}
+}
+
+func TestSendMessageWithoutReply(t *testing.T) {
+	c, calls := fake(t, 200, `{"ok":true,"result":{"message_id":1,"chat":{"id":-100}}}`)
+	if _, err := c.SendMessage(context.Background(), Message{ChatID: "-100", Text: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	f := (*calls)[0].fields
+	if _, ok := f["reply_parameters"]; ok {
+		t.Fatal("reply_parameters sent without ReplyTo")
+	}
+	if v, ok := f["disable_notification"]; ok && v != "false" {
+		t.Fatalf("disable_notification %q", v)
+	}
+}
+
+func TestEditMessageText(t *testing.T) {
+	c, calls := fake(t, 200, `{"ok":true,"result":{"message_id":55,"chat":{"id":-100}}}`)
+	if err := c.EditMessageText(context.Background(), "-100", 55, "new"); err != nil {
+		t.Fatal(err)
+	}
+	got := (*calls)[0]
+	if !strings.HasSuffix(got.path, "/editMessageText") || got.fields["message_id"] != "55" || got.fields["text"] != "new" || got.fields["parse_mode"] != "HTML" {
+		t.Fatalf("call %+v", got)
+	}
+	assertNoPreview(t, got.fields)
+}
+
+func TestGetChatLinked(t *testing.T) {
+	c, _ := fake(t, 200, `{"ok":true,"result":{"id":-1001,"type":"channel","linked_chat_id":-1002}}`)
+	chat, err := c.GetChat(context.Background(), "-1001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chat.ID != -1001 || chat.LinkedChatID != -1002 {
+		t.Fatalf("chat %+v", chat)
+	}
+}
+
+func TestConvertAutomaticForward(t *testing.T) {
+	var u models.Update
+	raw := `{"update_id":10,"message":{"message_id":3,"date":1,"chat":{"id":-1002,"type":"supergroup"},"is_automatic_forward":true,"forward_origin":{"type":"channel","date":1,"chat":{"id":-1001,"type":"channel"},"message_id":55}}}`
+	if err := json.Unmarshal([]byte(raw), &u); err != nil {
+		t.Fatal(err)
+	}
+	got := Convert(&u)
+	m := got.Message
+	if got.UpdateID != 10 || m == nil || m.MessageID != 3 || m.ChatID != -1002 || !m.IsAutomaticForward || m.ForwardOriginMessageID != 55 {
+		t.Fatalf("update %+v message %+v", got, m)
+	}
+	if Convert(&models.Update{ID: 11}).Message != nil {
+		t.Fatal("message from empty update")
+	}
+}
+
+func TestListenDeliversUpdates(t *testing.T) {
+	served := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !served {
+			served = true
+			_, _ = io.WriteString(w, `{"ok":true,"result":[{"update_id":7,"message":{"message_id":3,"date":1,"chat":{"id":-1002,"type":"supergroup"},"is_automatic_forward":true,"forward_origin":{"type":"channel","date":1,"chat":{"id":-1001,"type":"channel"},"message_id":55}}}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"ok":true,"result":[]}`)
+	}))
+	defer srv.Close()
+	c, err := New(token, srv.URL, quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	got := make(chan Update, 1)
+	go c.Listen(ctx, func(u Update) { got <- u; cancel() })
+	select {
+	case u := <-got:
+		if u.Message == nil || u.Message.ForwardOriginMessageID != 55 {
+			t.Fatalf("update %+v", u)
+		}
+	case <-ctx.Done():
+		t.Fatal("no update delivered")
+	}
+}
+
+func TestRateLimited(t *testing.T) {
+	c, _ := fake(t, 429, `{"ok":false,"error_code":429,"description":"Too Many Requests: retry after 7","parameters":{"retry_after":7}}`)
+	_, err := c.SendMessage(context.Background(), Message{ChatID: "-100", Text: "hi"})
+	var tooMany *bot.TooManyRequestsError
+	if !errors.As(err, &tooMany) || tooMany.RetryAfter != 7 {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestNotModified(t *testing.T) {
+	c, _ := fake(t, 400, `{"ok":false,"error_code":400,"description":"Bad Request: message is not modified: specified new message content and reply markup are exactly the same"}`)
+	err := c.EditMessageText(context.Background(), "-100", 1, "same")
+	if !IsNotModified(err) {
+		t.Fatalf("err %v", err)
+	}
+	if IsNotModified(errors.New("message is not modified")) {
+		t.Fatal("plain error treated as not modified")
+	}
+}
+
+func TestErrorHidesToken(t *testing.T) {
+	c, err := New(token, "http://127.0.0.1:1", quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.SendMessage(context.Background(), Message{ChatID: "-100", Text: "hi"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if strings.Contains(err.Error(), "secret-token") {
+		t.Fatalf("token leaked: %v", err)
+	}
+}
