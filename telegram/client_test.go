@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 )
 
@@ -123,12 +122,12 @@ func TestConvertAutomaticForward(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &u); err != nil {
 		t.Fatal(err)
 	}
-	got := Convert(&u)
+	got := convert(&u)
 	m := got.Message
 	if got.UpdateID != 10 || m == nil || m.MessageID != 3 || m.ChatID != -1002 || !m.IsAutomaticForward || m.ForwardOriginMessageID != 55 {
 		t.Fatalf("update %+v message %+v", got, m)
 	}
-	if Convert(&models.Update{ID: 11}).Message != nil {
+	if convert(&models.Update{ID: 11}).Message != nil {
 		t.Fatal("message from empty update")
 	}
 }
@@ -165,20 +164,32 @@ func TestListenDeliversUpdates(t *testing.T) {
 func TestRateLimited(t *testing.T) {
 	c, _ := fake(t, 429, `{"ok":false,"error_code":429,"description":"Too Many Requests: retry after 7","parameters":{"retry_after":7}}`)
 	_, err := c.SendMessage(context.Background(), Message{ChatID: "-100", Text: "hi"})
-	var tooMany *bot.TooManyRequestsError
-	if !errors.As(err, &tooMany) || tooMany.RetryAfter != 7 {
+	var rl *RateLimitedError
+	if !errors.As(err, &rl) || rl.RetryAfter != 7*time.Second {
 		t.Fatalf("err %v", err)
 	}
 }
 
 func TestNotModified(t *testing.T) {
 	c, _ := fake(t, 400, `{"ok":false,"error_code":400,"description":"Bad Request: message is not modified: specified new message content and reply markup are exactly the same"}`)
-	err := c.EditMessageText(context.Background(), "-100", 1, "same")
-	if !IsNotModified(err) {
+	if err := c.EditMessageText(context.Background(), "-100", 1, "same"); err != nil {
 		t.Fatalf("err %v", err)
 	}
-	if IsNotModified(errors.New("message is not modified")) {
-		t.Fatal("plain error treated as not modified")
+}
+
+func TestEditMessageGone(t *testing.T) {
+	c, _ := fake(t, 400, `{"ok":false,"error_code":400,"description":"Bad Request: message to edit not found"}`)
+	err := c.EditMessageText(context.Background(), "-100", 1, "new")
+	if !errors.Is(err, ErrMessageGone) {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestReplyTargetGone(t *testing.T) {
+	c, _ := fake(t, 400, `{"ok":false,"error_code":400,"description":"Bad Request: message to be replied not found"}`)
+	_, err := c.SendMessage(context.Background(), Message{ChatID: "-100", Text: "hi", ReplyTo: 9})
+	if !errors.Is(err, ErrMessageGone) {
+		t.Fatalf("err %v", err)
 	}
 }
 
