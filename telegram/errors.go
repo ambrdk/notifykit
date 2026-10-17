@@ -29,7 +29,7 @@ func isNotModified(err error) bool {
 	return errors.Is(err, bot.ErrorBadRequest) && strings.Contains(err.Error(), "message is not modified")
 }
 
-func translate(method string, err error) error {
+func translate(method string, err error, secret string) error {
 	if err == nil || isNotModified(err) {
 		return nil
 	}
@@ -37,12 +37,16 @@ func translate(method string, err error) error {
 	if errors.As(err, &tooMany) {
 		return &RateLimitedError{RetryAfter: time.Duration(tooMany.RetryAfter) * time.Second}
 	}
+	text := err.Error()
+	if secret != "" {
+		text = strings.ReplaceAll(text, secret, "***")
+	}
 	if errors.Is(err, bot.ErrorBadRequest) {
 		for _, d := range goneDescriptions {
-			if strings.Contains(err.Error(), d) {
-				return fmt.Errorf("telegram %s: %w: %s", method, ErrMessageGone, err.Error())
+			if strings.Contains(text, d) {
+				return fmt.Errorf("telegram %s: %w: %s", method, ErrMessageGone, text)
 			}
 		}
 	}
-	return fmt.Errorf("telegram %s: %s", method, err.Error())
+	return fmt.Errorf("telegram %s: %s", method, text)
 }

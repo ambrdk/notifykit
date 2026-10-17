@@ -44,7 +44,7 @@ func TestTranslate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := translate("sendMessage", tc.in)
+			got := translate("sendMessage", tc.in, "")
 			if !tc.want(got) {
 				t.Fatalf("translate(%v) = %v", tc.in, got)
 			}

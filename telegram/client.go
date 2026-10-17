@@ -14,10 +14,12 @@ import (
 const pollTimeout = time.Minute
 
 type Client struct {
-	b        *bot.Bot
-	observe  func(Call)
-	mu       sync.Mutex
-	onUpdate func(Update)
+	b         *bot.Bot
+	token     string
+	observe   func(Call)
+	mu        sync.Mutex
+	onUpdate  func(Update)
+	listening context.Context
 }
 
 type Message struct {
@@ -49,7 +51,7 @@ func New(token, serverURL string, log *slog.Logger, with ...Option) (*Client, er
 	for _, opt := range with {
 		opt(&o)
 	}
-	c := &Client{observe: o.observe}
+	c := &Client{token: token, observe: o.observe}
 	opts := []bot.Option{
 		bot.WithSkipGetMe(),
 		bot.WithHTTPClient(pollTimeout, &http.Client{Timeout: pollTimeout + 10*time.Second}),
@@ -57,8 +59,7 @@ func New(token, serverURL string, log *slog.Logger, with ...Option) (*Client, er
 		bot.WithNotAsyncHandlers(),
 		bot.WithDefaultHandler(func(_ context.Context, _ *bot.Bot, u *models.Update) { c.dispatch(u) }),
 		bot.WithErrorsHandler(func(err error) {
-			log.Warn("telegram polling error", "error", err)
-			c.pollingError(err)
+			log.Warn("telegram polling error", "error", c.pollingError(err))
 		}),
 	}
 	if serverURL != "" {
@@ -120,6 +121,7 @@ func (c *Client) GetChat(ctx context.Context, chatID string) (Chat, error) {
 func (c *Client) Listen(ctx context.Context, onUpdate func(Update)) {
 	c.mu.Lock()
 	c.onUpdate = onUpdate
+	c.listening = ctx
 	c.mu.Unlock()
 	c.b.Start(ctx)
 }

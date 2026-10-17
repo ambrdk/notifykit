@@ -3,10 +3,13 @@ package telegram
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -102,6 +105,47 @@ func TestObserverPollingError(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+func TestObserverQuietWhenShutdownDropsUpdates(t *testing.T) {
+	var batch strings.Builder
+	batch.WriteString(`{"ok":true,"result":[`)
+	for i := 1; i <= 1500; i++ {
+		if i > 1 {
+			batch.WriteString(",")
+		}
+		fmt.Fprintf(&batch, `{"update_id":%d,"message":{"message_id":%d,"date":1,"chat":{"id":-1002,"type":"supergroup"}}}`, i, i)
+	}
+	batch.WriteString(`]}`)
+	var served atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if served.CompareAndSwap(false, true) {
+			_, _ = io.WriteString(w, batch.String())
+			return
+		}
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	rec := &recorder{}
+	c, err := New(token, srv.URL, quiet(), WithObserver(rec.observe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { c.Listen(ctx, func(Update) { cancel() }); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Listen did not return")
+	}
+	for _, call := range rec.all() {
+		if call.Method == "getUpdates" && call.Err != nil {
+			t.Fatalf("shutdown reported as error: %+v", call)
+		}
+	}
 }
 
 func TestObserverQuietAfterShutdown(t *testing.T) {

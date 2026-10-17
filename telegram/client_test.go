@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -205,4 +206,63 @@ func TestErrorHidesToken(t *testing.T) {
 	if strings.Contains(err.Error(), "secret-token") {
 		t.Fatalf("token leaked: %v", err)
 	}
+}
+
+func TestErrorHidesTokenOnBadURL(t *testing.T) {
+	c, err := New(token, "http://bad host", quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.SendMessage(context.Background(), Message{ChatID: "-100", Text: "hi"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if strings.Contains(err.Error(), "secret-token") {
+		t.Fatalf("token leaked: %v", err)
+	}
+}
+
+func TestPollingLogHidesToken(t *testing.T) {
+	var buf safeBuffer
+	seen := make(chan struct{}, 1)
+	c, err := New(token, "http://bad host", slog.New(slog.NewTextHandler(&buf, nil)), WithObserver(func(Call) {
+		select {
+		case seen <- struct{}{}:
+		default:
+		}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan struct{})
+	go func() { c.Listen(ctx, func(Update) {}); close(done) }()
+	select {
+	case <-seen:
+	case <-ctx.Done():
+		t.Fatal("no polling error")
+	}
+	cancel()
+	<-done
+	if out := buf.String(); out == "" || strings.Contains(out, "secret-token") {
+		t.Fatalf("log %q", out)
+	}
+}
+
+type safeBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *safeBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *safeBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }

@@ -19,15 +19,25 @@ func WithObserver(fn func(Call)) Option {
 }
 
 func (c *Client) finish(method string, start time.Time, err error) error {
-	err = translate(method, err)
+	err = translate(method, err, c.token)
 	if c.observe != nil {
 		c.observe(Call{Method: method, Err: err, Duration: time.Since(start)})
 	}
 	return err
 }
 
-func (c *Client) pollingError(err error) {
-	if c.observe != nil {
-		c.observe(Call{Method: "getUpdates", Err: translate("getUpdates", err)})
+func (c *Client) pollingError(err error) error {
+	err = translate("getUpdates", err, c.token)
+	if c.observe == nil || c.stopping() {
+		return err
 	}
+	c.observe(Call{Method: "getUpdates", Err: err})
+	return err
+}
+
+func (c *Client) stopping() bool {
+	c.mu.Lock()
+	ctx := c.listening
+	c.mu.Unlock()
+	return ctx != nil && ctx.Err() != nil
 }
