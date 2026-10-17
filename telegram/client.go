@@ -15,6 +15,7 @@ const pollTimeout = time.Minute
 
 type Client struct {
 	b        *bot.Bot
+	observe  func(Call)
 	mu       sync.Mutex
 	onUpdate func(Update)
 }
@@ -43,15 +44,22 @@ type ChatMessage struct {
 	ForwardOriginMessageID int64
 }
 
-func New(token, serverURL string, log *slog.Logger) (*Client, error) {
-	c := &Client{}
+func New(token, serverURL string, log *slog.Logger, with ...Option) (*Client, error) {
+	var o options
+	for _, opt := range with {
+		opt(&o)
+	}
+	c := &Client{observe: o.observe}
 	opts := []bot.Option{
 		bot.WithSkipGetMe(),
 		bot.WithHTTPClient(pollTimeout, &http.Client{Timeout: pollTimeout + 10*time.Second}),
 		bot.WithAllowedUpdates(bot.AllowedUpdates{"message"}),
 		bot.WithNotAsyncHandlers(),
 		bot.WithDefaultHandler(func(_ context.Context, _ *bot.Bot, u *models.Update) { c.dispatch(u) }),
-		bot.WithErrorsHandler(func(err error) { log.Warn("telegram polling error", "error", err) }),
+		bot.WithErrorsHandler(func(err error) {
+			log.Warn("telegram polling error", "error", err)
+			c.pollingError(err)
+		}),
 	}
 	if serverURL != "" {
 		opts = append(opts, bot.WithServerURL(serverURL))
@@ -75,14 +83,16 @@ func (c *Client) SendMessage(ctx context.Context, m Message) (int64, error) {
 	if m.ReplyTo != 0 {
 		params.ReplyParameters = &models.ReplyParameters{MessageID: int(m.ReplyTo)}
 	}
+	start := time.Now()
 	msg, err := c.b.SendMessage(ctx, params)
-	if err != nil {
-		return 0, translate("sendMessage", err)
+	if err := c.finish("sendMessage", start, err); err != nil {
+		return 0, err
 	}
 	return int64(msg.ID), nil
 }
 
 func (c *Client) EditMessageText(ctx context.Context, chatID string, messageID int64, text string) error {
+	start := time.Now()
 	_, err := c.b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:             chatID,
 		MessageID:          int(messageID),
@@ -90,7 +100,7 @@ func (c *Client) EditMessageText(ctx context.Context, chatID string, messageID i
 		ParseMode:          models.ParseModeHTML,
 		LinkPreviewOptions: noPreview(),
 	})
-	return translate("editMessageText", err)
+	return c.finish("editMessageText", start, err)
 }
 
 func noPreview() *models.LinkPreviewOptions {
@@ -99,9 +109,10 @@ func noPreview() *models.LinkPreviewOptions {
 }
 
 func (c *Client) GetChat(ctx context.Context, chatID string) (Chat, error) {
+	start := time.Now()
 	chat, err := c.b.GetChat(ctx, &bot.GetChatParams{ChatID: chatID})
-	if err != nil {
-		return Chat{}, translate("getChat", err)
+	if err := c.finish("getChat", start, err); err != nil {
+		return Chat{}, err
 	}
 	return Chat{ID: chat.ID, LinkedChatID: chat.LinkedChatID}, nil
 }

@@ -24,7 +24,7 @@ type call struct {
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
-func fake(t *testing.T, status int, reply string) (*Client, *[]call) {
+func fake(t *testing.T, status int, reply string, opts ...Option) (*Client, *[]call) {
 	t.Helper()
 	calls := &[]call{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -40,7 +40,7 @@ func fake(t *testing.T, status int, reply string) (*Client, *[]call) {
 		_, _ = io.WriteString(w, reply)
 	}))
 	t.Cleanup(srv.Close)
-	c, err := New(token, srv.URL, quiet())
+	c, err := New(token, srv.URL, quiet(), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
