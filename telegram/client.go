@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,11 +12,16 @@ import (
 	"github.com/go-telegram/bot/models"
 )
 
-const pollTimeout = time.Minute
+const (
+	pollTimeout   = time.Minute
+	defaultServer = "https://api.telegram.org"
+)
 
 type Client struct {
 	b         *bot.Bot
 	token     string
+	server    string
+	http      *http.Client
 	observe   func(Call)
 	mu        sync.Mutex
 	onUpdate  func(Update)
@@ -51,7 +57,11 @@ func New(token, serverURL string, log *slog.Logger, with ...Option) (*Client, er
 	for _, opt := range with {
 		opt(&o)
 	}
-	c := &Client{token: token, observe: o.observe}
+	server := serverURL
+	if server == "" {
+		server = defaultServer
+	}
+	c := &Client{token: token, server: strings.TrimRight(server, "/"), http: &http.Client{Timeout: pollTimeout + 10*time.Second}, observe: o.observe}
 	opts := []bot.Option{
 		bot.WithSkipGetMe(),
 		bot.WithHTTPClient(pollTimeout, &http.Client{Timeout: pollTimeout + 10*time.Second}),
