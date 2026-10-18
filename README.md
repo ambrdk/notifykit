@@ -22,6 +22,10 @@ client, err := telegram.New(token, "", log, telegram.WithObserver(tgmetrics.Obse
 
 That registers `my_service_telegram_requests_total{method,result}` with `result` one of `ok`, `rate_limited`, `gone`, `error`. The `telegram` package itself does not import Prometheus, so a service without metrics does not pull it in.
 
+`thread` keeps one channel post and one comment under it in the channel's discussion group. `Publish` takes the message ids from the last call (empty the first time) and the new texts, and returns the ids to store for next time. The first call sends the post, then waits for Telegram to copy it into the discussion group and replies to that copy. Later calls edit both messages. If someone deleted the post or the comment, it is sent again. If the copy does not show up within the wait, the post goes out without a comment and the next call tries again.
+
+The comment needs the bot to read `getUpdates`, and Telegram serves updates for one token to one reader at a time. A bot that already long-polls somewhere else, like alert-relay, cannot also be used here. Give `thread` its own bot, or run its callers one at a time.
+
 ## Using the module
 
 ```bash
