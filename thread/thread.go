@@ -136,7 +136,7 @@ func (t *Thread) Publish(ctx context.Context, ids IDs, p Post) (Outcome, error) 
 			return Outcome{IDs: ids}, err
 		case copyID != 0:
 			ids.CopyID = copyID
-		case !ids.CopyWaited:
+		case !ids.CopyWaited && !p.Final:
 			ids.CopyWaited = true
 			if pending {
 				return Outcome{IDs: ids, Status: CopyPending}, nil

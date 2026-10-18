@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
-	"unicode/utf8"
+	"unicode/utf16"
 
 	"github.com/ambrdk/notifykit/telegram"
 )
@@ -72,7 +72,7 @@ func (f *Fake) SendMessage(_ context.Context, m telegram.Message) (int64, error)
 		f.mu.Unlock()
 		return 0, err
 	}
-	if utf8.RuneCountInString(m.Text) > maxText {
+	if utf16Len(m.Text) > maxText {
 		f.mu.Unlock()
 		return 0, errors.New("telegram sendMessage: Bad Request: message is too long")
 	}
@@ -115,7 +115,7 @@ func (f *Fake) EditMessageText(_ context.Context, chatID string, messageID int64
 	if err := f.chatFailure(chatID); err != nil {
 		return err
 	}
-	if utf8.RuneCountInString(text) > maxText {
+	if utf16Len(text) > maxText {
 		return errors.New("telegram editMessageText: Bad Request: message is too long")
 	}
 	m := f.find(chatID, messageID)
@@ -276,6 +276,14 @@ func (f *Fake) find(chatID string, id int64) *Sent {
 		}
 	}
 	return nil
+}
+
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		n += utf16.RuneLen(r)
+	}
+	return n
 }
 
 func notify(listeners []func(telegram.Update), updates []telegram.Update) {

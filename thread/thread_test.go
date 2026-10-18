@@ -319,6 +319,67 @@ func TestPublishLongPost(t *testing.T) {
 	}
 }
 
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		if r >= 0x10000 {
+			n += 2
+		} else {
+			n++
+		}
+	}
+	return n
+}
+
+func TestFitDenseEscapes(t *testing.T) {
+	for name, in := range map[string]string{
+		"amp":  strings.Repeat("&amp;", 5000),
+		"json": strings.Repeat(`{&#34;a&#34;:&#34;b&#34;,&#34;c&#34;:&lt;d&gt;}`, 400),
+	} {
+		got := fit(in)
+		if utf16Len(got) > 4096 || !strings.HasSuffix(got, "…") || len(got) < 1000 {
+			t.Fatalf("%s: len %d", name, utf16Len(got))
+		}
+	}
+}
+
+func TestFitCountsUTF16(t *testing.T) {
+	got := fit(strings.Repeat("🟡", 3000))
+	if utf16Len(got) > 4096 {
+		t.Fatalf("utf16 length %d", utf16Len(got))
+	}
+}
+
+func TestPublishCommentUTF16(t *testing.T) {
+	th, f, _ := setup(discussion)
+	var skips []int
+	render := func(skip int) string {
+		skips = append(skips, skip)
+		return strings.Repeat("🟡", 3000-skip*500)
+	}
+	if _, err := th.Publish(context.Background(), IDs{}, Post{Text: "p", Comment: render}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Messages(group)[1].Text; utf16Len(got) > 4096 || skips[len(skips)-1] != 2 {
+		t.Fatalf("utf16 %d skips %v", utf16Len(got), skips)
+	}
+}
+
+func TestPublishFinalWithoutCopyGoesUnthreaded(t *testing.T) {
+	th, f, q := setup(discussion)
+	ctx := context.Background()
+	f.HoldCopies(true)
+	q.pending = true
+	first, _ := th.Publish(ctx, IDs{}, Post{Text: "p"})
+	ids := first.IDs
+	p := post("p2", "c")
+	p.Final = true
+	out, err := th.Publish(ctx, ids, p)
+	if err != nil || out.Status != Unthreaded || out.IDs.CommentID == 0 {
+		t.Fatalf("out %+v err %v", out, err)
+	}
+}
+
 func TestFitStripsHTML(t *testing.T) {
 	in := "<b>" + strings.Repeat("я &amp; ", 1000) + "</b>"
 	got := fit(in)

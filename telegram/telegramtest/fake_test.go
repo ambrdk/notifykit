@@ -94,6 +94,9 @@ func TestFakeTooLong(t *testing.T) {
 	if _, err := f.SendMessage(context.Background(), telegram.Message{ChatID: channel, Text: strings.Repeat("я", 4096)}); err != nil {
 		t.Fatalf("4096 runes: %v", err)
 	}
+	if _, err := f.SendMessage(context.Background(), telegram.Message{ChatID: channel, Text: strings.Repeat("🟡", 2049)}); err == nil {
+		t.Fatal("2049 emoji are 4098 UTF-16 units and must be too long")
+	}
 }
 
 func TestFakePollAck(t *testing.T) {
