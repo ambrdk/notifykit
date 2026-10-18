@@ -22,14 +22,44 @@ client, err := telegram.New(token, "", log, telegram.WithObserver(tgmetrics.Obse
 
 That registers `my_service_telegram_requests_total{method,result}` with `result` one of `ok`, `rate_limited`, `gone`, `error`. The `telegram` package itself does not import Prometheus, so a service without metrics does not pull it in.
 
-`thread` keeps one channel post and one comment under it in the channel's discussion group. `Publish` takes the message ids from the last call (empty the first time) and the new texts, and returns the ids to store for next time. The first call sends the post, then waits for Telegram to copy it into the discussion group and replies to that copy. Later calls edit both messages. If someone deleted the post or the comment, it is sent again. If the copy does not show up within the wait, the post goes out without a comment and the next call tries again.
+`thread` keeps one channel post and one comment under it in the channel's discussion group. Telegram copies every channel post into that group, and a comment is a reply to the copy.
 
-The comment needs the bot to read `getUpdates`, and Telegram serves updates for one token to one reader at a time. A bot that already long-polls somewhere else, like alert-relay, cannot also be used here. Give `thread` its own bot, or run its callers one at a time.
+```go
+th := thread.New(client, channelID, copies)
+out, err := th.Publish(ctx, ids, thread.Post{Text: post, Comment: render})
+```
+
+`Publish` takes the ids from the last call (empty the first time) and returns the ids to store for next time, even when it also returns an error. `out.Status` says what happened to the comment:
+
+| Status | Meaning |
+|---|---|
+| `Commented` | the comment is a reply to the post's copy |
+| `Posted` | `Post.Comment` was nil, only the post was sent |
+| `CopyPending` | the copy has not arrived yet, a later call will comment |
+| `NoCopy` | the copy did not arrive within the wait |
+| `NoDiscussion` | the channel has no discussion group, or reading it failed |
+| `Unthreaded` | the copy never arrived or is gone, so the comment went to the group without a reply |
+| `PostGone` | `Post.Final` was set and the post had been deleted, nothing was sent |
+
+The module handles the cases that used to live in every caller:
+
+- It looks up the discussion group itself and retries on the next call if that fails.
+- A deleted post is sent again, unless `Post.Final` is set. A deleted comment is sent again.
+- A 429 that asks to wait no longer than `WithMaxWait` (10 s by default) is retried once. A longer one comes back as `*telegram.RateLimitedError`.
+- Text over 4096 characters is shortened. `Post.Comment` gets called with a growing `skip` so the caller can drop old lines and keep its markup intact. Only if that does not help is the text cut as plain text.
+- The post is silent unless `Post.Loud` is set. Comments are always silent.
+
+`Copies` is how the copy reaches the thread. There are two adapters:
+
+- `thread.Waiting(client, wait)` is for a short-lived process like a CI step. It long-polls `getUpdates` for up to `wait` and does not acknowledge other posts' updates, so a copy that arrives late is still there for the next run. Only updates older than an hour are acknowledged. Telegram serves updates for one token to one reader at a time, so give this bot to no one else and run its callers one at a time.
+- `thread.NewFeed(ttl, now)` is for a long-running service that already listens: pass `feed.Observe` to `client.Listen` and `feed` to `thread.New`. `Publish` does not block. `feed.OnCopy(fn)` reports the post id when its copy arrives, and the caller calls `Publish` again to post the comment.
+
+`telegram/telegramtest` is a fake client for tests: sends, edits, deleted messages, automatic copies into the discussion group (which can be held back), the `getUpdates` queue and rate limits behave as in Telegram.
 
 ## Using the module
 
 ```bash
-go get github.com/ambrdk/notifykit@v0.1.0
+go get github.com/ambrdk/notifykit@v0.3.0
 ```
 
 The module is public, so CI and Docker builds fetch it through the regular Go proxy with no tokens.
