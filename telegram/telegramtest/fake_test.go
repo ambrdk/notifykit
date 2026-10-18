@@ -32,7 +32,7 @@ func TestFakeAutoForward(t *testing.T) {
 	if m == nil || !m.IsAutomaticForward || m.ChatID != discussion || m.ForwardOriginMessageID != post || m.Date.IsZero() {
 		t.Fatalf("copy %+v", m)
 	}
-	if got := f.Messages(group); len(got) != 1 || got[0].ID != m.MessageID {
+	if got := f.Messages(group); len(got) != 1 || got[0].ID != m.MessageID || !got[0].Forwarded {
 		t.Fatalf("discussion messages %+v", got)
 	}
 	if got := f.Messages(channel); len(got) != 1 || !got[0].Silent || got[0].Text != "post" {
@@ -116,6 +116,28 @@ func TestFakePollAck(t *testing.T) {
 	}
 	if ups, _ := f.Poll(ctx, 0, 0); len(ups) != 100 {
 		t.Fatalf("page %d", len(ups))
+	}
+}
+
+func TestFakeFailChat(t *testing.T) {
+	f := New(channel, discussion)
+	ctx := context.Background()
+	boom := errors.New("boom")
+	f.FailChat(group, 1, boom)
+	post, err := f.SendMessage(ctx, telegram.Message{ChatID: channel, Text: "p"})
+	if err != nil {
+		t.Fatalf("channel send failed: %v", err)
+	}
+	copyID := f.Messages(group)[0].ID
+	if _, err := f.SendMessage(ctx, telegram.Message{ChatID: group, Text: "c", ReplyTo: copyID}); !errors.Is(err, boom) {
+		t.Fatalf("group send: %v", err)
+	}
+	if _, err := f.SendMessage(ctx, telegram.Message{ChatID: group, Text: "c", ReplyTo: copyID}); err != nil {
+		t.Fatalf("second group send: %v", err)
+	}
+	f.FailChat(channel, 1, boom)
+	if err := f.EditMessageText(ctx, channel, post, "p2"); !errors.Is(err, boom) {
+		t.Fatalf("channel edit: %v", err)
 	}
 }
 

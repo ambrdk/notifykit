@@ -18,10 +18,16 @@ const (
 )
 
 type Sent struct {
-	ID      int64
-	Text    string
-	ReplyTo int64
-	Silent  bool
+	ID        int64
+	Text      string
+	ReplyTo   int64
+	Silent    bool
+	Forwarded bool
+}
+
+type chatFailure struct {
+	times int
+	err   error
 }
 
 type Fake struct {
@@ -38,6 +44,7 @@ type Fake struct {
 	limitCalls int
 	limitAfter time.Duration
 	getChatErr error
+	chatFails  map[string]*chatFailure
 	calls      map[string]int
 	now        func() time.Time
 }
@@ -49,6 +56,7 @@ func New(channelID string, discussionID int64) *Fake {
 		chats:      map[string][]*Sent{},
 		deleted:    map[string]map[int64]bool{},
 		held:       map[int64]telegram.Update{},
+		chatFails:  map[string]*chatFailure{},
 		calls:      map[string]int{},
 		now:        time.Now,
 	}
@@ -57,6 +65,10 @@ func New(channelID string, discussionID int64) *Fake {
 func (f *Fake) SendMessage(_ context.Context, m telegram.Message) (int64, error) {
 	f.mu.Lock()
 	if err := f.begin("sendMessage"); err != nil {
+		f.mu.Unlock()
+		return 0, err
+	}
+	if err := f.chatFailure(m.ChatID); err != nil {
 		f.mu.Unlock()
 		return 0, err
 	}
@@ -72,7 +84,7 @@ func (f *Fake) SendMessage(_ context.Context, m telegram.Message) (int64, error)
 	var deliver []telegram.Update
 	if m.ChatID == f.channel && f.discussion != 0 {
 		group := strconv.FormatInt(f.discussion, 10)
-		copyID := f.add(group, Sent{Text: m.Text})
+		copyID := f.add(group, Sent{Text: m.Text, Forwarded: true})
 		f.lastUpdate++
 		u := telegram.Update{UpdateID: f.lastUpdate, Message: &telegram.ChatMessage{
 			MessageID:              copyID,
@@ -98,6 +110,9 @@ func (f *Fake) EditMessageText(_ context.Context, chatID string, messageID int64
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.begin("editMessageText"); err != nil {
+		return err
+	}
+	if err := f.chatFailure(chatID); err != nil {
 		return err
 	}
 	if utf8.RuneCountInString(text) > maxText {
@@ -188,6 +203,21 @@ func (f *Fake) FailGetChat(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.getChatErr = err
+}
+
+func (f *Fake) FailChat(chatID string, times int, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.chatFails[chatID] = &chatFailure{times: times, err: err}
+}
+
+func (f *Fake) chatFailure(chatID string) error {
+	c := f.chatFails[chatID]
+	if c == nil || c.times == 0 {
+		return nil
+	}
+	c.times--
+	return c.err
 }
 
 func (f *Fake) OnUpdate(fn func(telegram.Update)) {
