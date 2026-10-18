@@ -133,6 +133,16 @@ func TestConvertAutomaticForward(t *testing.T) {
 	}
 }
 
+func TestConvertDate(t *testing.T) {
+	var u models.Update
+	if err := json.Unmarshal([]byte(`{"update_id":12,"message":{"message_id":4,"date":1760800000,"chat":{"id":-1002,"type":"supergroup"}}}`), &u); err != nil {
+		t.Fatal(err)
+	}
+	if got := convert(&u).Message.Date; !got.Equal(time.Unix(1760800000, 0)) {
+		t.Fatalf("date %v", got)
+	}
+}
+
 func TestListenDeliversUpdates(t *testing.T) {
 	served := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

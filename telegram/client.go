@@ -50,6 +50,7 @@ type ChatMessage struct {
 	ChatID                 int64
 	IsAutomaticForward     bool
 	ForwardOriginMessageID int64
+	Date                   time.Time
 }
 
 func New(token, serverURL string, log *slog.Logger, with ...Option) (*Client, error) {
@@ -152,7 +153,7 @@ func convert(u *models.Update) Update {
 	if m == nil {
 		return out
 	}
-	cm := &ChatMessage{MessageID: int64(m.ID), ChatID: m.Chat.ID, IsAutomaticForward: m.IsAutomaticForward}
+	cm := &ChatMessage{MessageID: int64(m.ID), ChatID: m.Chat.ID, IsAutomaticForward: m.IsAutomaticForward, Date: time.Unix(int64(m.Date), 0)}
 	if m.ForwardOrigin != nil && m.ForwardOrigin.MessageOriginChannel != nil {
 		cm.ForwardOriginMessageID = int64(m.ForwardOrigin.MessageOriginChannel.MessageID)
 	}
