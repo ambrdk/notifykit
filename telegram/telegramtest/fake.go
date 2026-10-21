@@ -45,6 +45,7 @@ type Fake struct {
 	limitAfter time.Duration
 	getChatErr error
 	chatFails  map[string]*chatFailure
+	pollFail   chatFailure
 	calls      map[string]int
 	now        func() time.Time
 }
@@ -151,6 +152,10 @@ func (f *Fake) Poll(_ context.Context, offset int64, _ time.Duration) ([]telegra
 	if err := f.begin("getUpdates"); err != nil {
 		return nil, err
 	}
+	if f.pollFail.times > 0 {
+		f.pollFail.times--
+		return nil, f.pollFail.err
+	}
 	if offset > 0 {
 		kept := f.queue[:0]
 		for _, u := range f.queue {
@@ -209,6 +214,12 @@ func (f *Fake) FailChat(chatID string, times int, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.chatFails[chatID] = &chatFailure{times: times, err: err}
+}
+
+func (f *Fake) FailPolls(times int, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pollFail = chatFailure{times: times, err: err}
 }
 
 func (f *Fake) chatFailure(chatID string) error {

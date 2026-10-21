@@ -9,7 +9,10 @@ import (
 	"github.com/go-telegram/bot"
 )
 
-var ErrMessageGone = errors.New("telegram: message is gone")
+var (
+	ErrMessageGone  = errors.New("telegram: message is gone")
+	ErrPollConflict = errors.New("telegram: another getUpdates reader holds the poll")
+)
 
 type RateLimitedError struct {
 	RetryAfter time.Duration
@@ -40,6 +43,9 @@ func translate(method string, err error, secret string) error {
 	text := err.Error()
 	if secret != "" {
 		text = strings.ReplaceAll(text, secret, "***")
+	}
+	if errors.Is(err, ErrPollConflict) {
+		return fmt.Errorf("telegram %s: %w%s", method, ErrPollConflict, strings.TrimPrefix(text, ErrPollConflict.Error()))
 	}
 	if errors.Is(err, bot.ErrorBadRequest) {
 		for _, d := range goneDescriptions {
