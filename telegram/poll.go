@@ -74,6 +74,8 @@ func (c *Client) poll(ctx context.Context, offset int64, timeout time.Duration) 
 		return nil, &bot.TooManyRequestsError{Message: r.Description, RetryAfter: r.Parameters.RetryAfter}
 	case http.StatusBadRequest:
 		return nil, fmt.Errorf("%w, %s", bot.ErrorBadRequest, r.Description)
+	case http.StatusConflict:
+		return nil, fmt.Errorf("%w: %s", ErrPollConflict, r.Description)
 	default:
 		return nil, errors.New(r.Description)
 	}

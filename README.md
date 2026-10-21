@@ -4,10 +4,11 @@ Shared Go code for the services that post to chat channels. It has a Telegram Bo
 
 ## Packages
 
-`telegram` sends, edits and reads messages and long-polls for updates. Callers react to two error outcomes:
+`telegram` sends, edits and reads messages and long-polls for updates. Callers react to three error outcomes:
 
 - `ErrMessageGone`: the message being edited or replied to is no longer there (deleted, or Telegram refuses to edit it). Check with `errors.Is`.
 - `*RateLimitedError`: Telegram answered 429. `RetryAfter` says how long to wait. The client does not retry by itself.
+- `ErrPollConflict`: Telegram answered 409 to `getUpdates` because another reader of the same token holds the poll. Check with `errors.Is`.
 
 Editing a message with the same text it already has returns `nil`. Any other failure is an opaque error with the method name and Telegram's description in its text.
 
@@ -51,10 +52,10 @@ The module handles the cases that used to live in every caller:
 
 `Copies` is how the copy reaches the thread. There are two adapters:
 
-- `thread.Waiting(client, wait)` is for a short-lived process like a CI step. It long-polls `getUpdates` for up to `wait` and does not acknowledge other posts' updates, so a copy that arrives late is still there for the next run. Only updates older than an hour are acknowledged. Telegram serves updates for one token to one reader at a time, so give this bot to no one else and run its callers one at a time.
+- `thread.Waiting(client, wait)` is for a short-lived process like a CI step. It long-polls `getUpdates` for up to `wait` and does not acknowledge other posts' updates, so a copy that arrives late is still there for the next run. Only updates older than an hour are acknowledged. Telegram serves updates for one token to one reader at a time. When another reader holds the poll, `Find` pauses for a second and asks again until `wait` runs out, so callers of one bot may overlap; still give this bot to no one else.
 - `thread.NewFeed(ttl, now)` is for a long-running service that already listens: pass `feed.Observe` to `client.Listen` and `feed` to `thread.New`. `Publish` does not block. `feed.OnCopy(fn)` reports the post id when its copy arrives, and the caller calls `Publish` again to post the comment.
 
-`telegram/telegramtest` is a fake client for tests: sends, edits, deleted messages, automatic copies into the discussion group (which can be held back), the `getUpdates` queue and rate limits behave as in Telegram.
+`telegram/telegramtest` is a fake client for tests: sends, edits, deleted messages, automatic copies into the discussion group (which can be held back), the `getUpdates` queue and rate limits behave as in Telegram. `FailPolls(n, err)` makes the next `n` polls fail.
 
 ## Using the module
 

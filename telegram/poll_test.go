@@ -73,6 +73,20 @@ func TestPollTranslatesErrors(t *testing.T) {
 	}
 }
 
+func TestPollReportsConflict(t *testing.T) {
+	var got map[string]any
+	var path string
+	url := pollServer(t, 409, `{"ok":false,"error_code":409,"description":"Conflict: terminated by other getUpdates request; make sure that only one bot instance is running"}`, &got, &path)
+	c, err := New(token, url, quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Poll(context.Background(), 0, 0)
+	if !errors.Is(err, ErrPollConflict) || !strings.Contains(err.Error(), "terminated by other getUpdates request") {
+		t.Fatalf("err %v", err)
+	}
+}
+
 func TestPollHidesToken(t *testing.T) {
 	c, err := New(token, "http://bad host", quiet())
 	if err != nil {

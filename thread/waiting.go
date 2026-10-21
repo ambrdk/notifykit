@@ -2,6 +2,7 @@ package thread
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/ambrdk/notifykit/telegram"
@@ -32,11 +33,11 @@ func (w *waiting) Find(ctx context.Context, discussionID, postID int64) (int64, 
 	deadline := w.now().Add(w.wait)
 	for {
 		updates, err := w.p.Poll(ctx, 0, w.pollTimeout(deadline.Sub(w.now())))
-		if err != nil {
+		if err != nil && !errors.Is(err, telegram.ErrPollConflict) {
 			return 0, false, err
 		}
 		copyID := match(updates, discussionID, postID)
-		if err := w.ackOld(ctx, updates); err != nil {
+		if err := w.ackOld(ctx, updates); err != nil && !errors.Is(err, telegram.ErrPollConflict) {
 			return copyID, false, err
 		}
 		remaining := deadline.Sub(w.now())

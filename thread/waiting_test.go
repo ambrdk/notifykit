@@ -2,6 +2,8 @@ package thread
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -115,6 +117,44 @@ func TestWaitingDeadline(t *testing.T) {
 	}
 	if c.slept < 30*time.Second || c.slept > 31*time.Second || f.Calls("getUpdates") > 40 {
 		t.Fatalf("slept %v polls %d", c.slept, f.Calls("getUpdates"))
+	}
+}
+
+func TestWaitingRetriesConflict(t *testing.T) {
+	f := telegramtest.New(channel, discussion)
+	w, c := waitingWith(f, 30*time.Second)
+	post := send(t, f, "p")
+	f.FailPolls(2, fmt.Errorf("telegram getUpdates: %w: terminated by other getUpdates request", telegram.ErrPollConflict))
+	id, pending, err := w.Find(context.Background(), discussion, post)
+	if err != nil || pending || id == 0 {
+		t.Fatalf("id %d pending %v err %v", id, pending, err)
+	}
+	if c.sleeps != 2 {
+		t.Fatalf("sleeps %d, want one pause per conflict", c.sleeps)
+	}
+}
+
+func TestWaitingConflictUntilDeadline(t *testing.T) {
+	f := telegramtest.New(channel, discussion)
+	w, c := waitingWith(f, 30*time.Second)
+	post := send(t, f, "p")
+	f.FailPolls(1000, fmt.Errorf("telegram getUpdates: %w", telegram.ErrPollConflict))
+	id, pending, err := w.Find(context.Background(), discussion, post)
+	if id != 0 || pending || err != nil {
+		t.Fatalf("id %d pending %v err %v", id, pending, err)
+	}
+	if c.slept < 30*time.Second || c.slept > 31*time.Second {
+		t.Fatalf("slept %v, want the wait and no more", c.slept)
+	}
+}
+
+func TestWaitingOtherPollErrorStops(t *testing.T) {
+	f := telegramtest.New(channel, discussion)
+	w, _ := waitingWith(f, 30*time.Second)
+	post := send(t, f, "p")
+	f.FailPolls(1, errors.New("telegram getUpdates: Unauthorized"))
+	if _, _, err := w.Find(context.Background(), discussion, post); err == nil {
+		t.Fatal("unauthorized poll was retried")
 	}
 }
 
